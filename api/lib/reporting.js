@@ -4,6 +4,20 @@ export const DAILY_REPORT_TIME = "08:00";
 export const REPORT_WINDOW_HOURS = 24;
 export const STORE_BROADCAST_ENABLED = false;
 
+const fallbackStoreSettings = [
+  { store_name: "鳳山五甲店", short_name: "五甲", group_id: null, group_name: null, noon_report_time: "14:00", evening_report_time: "19:00", closing_report_time: "23:00", daily_hq_report_time: "08:00", is_active: true },
+  { store_name: "鳳山凱旋店", short_name: "凱旋", group_id: null, group_name: null, noon_report_time: "14:00", evening_report_time: "19:00", closing_report_time: "22:30", daily_hq_report_time: "08:00", is_active: true },
+  { store_name: "鳳山武廟店", short_name: "武廟", group_id: null, group_name: null, noon_report_time: "14:00", evening_report_time: "19:00", closing_report_time: "22:30", daily_hq_report_time: "08:00", is_active: true },
+  { store_name: "鳳山中山店", short_name: "中山", group_id: null, group_name: null, noon_report_time: "14:00", evening_report_time: "19:00", closing_report_time: "22:30", daily_hq_report_time: "08:00", is_active: true },
+  { store_name: "鳳山南華店", short_name: "南華", group_id: null, group_name: null, noon_report_time: "14:00", evening_report_time: "19:00", closing_report_time: "21:00", daily_hq_report_time: "08:00", is_active: true },
+  { store_name: "前鎮隆興店", short_name: "隆興", group_id: null, group_name: null, noon_report_time: "14:00", evening_report_time: "19:00", closing_report_time: "22:30", daily_hq_report_time: "08:00", is_active: true },
+  { store_name: "三民大昌店", short_name: "大昌", group_id: "C664b7d66db0ef351a87a2a88acec921c", group_name: "義華 大昌管理群", noon_report_time: "14:00", evening_report_time: "19:00", closing_report_time: "22:30", daily_hq_report_time: "08:00", is_active: true },
+  { store_name: "三民義華店", short_name: "義華", group_id: "C664b7d66db0ef351a87a2a88acec921c", group_name: "義華 大昌管理群", noon_report_time: "14:00", evening_report_time: "19:00", closing_report_time: "22:30", daily_hq_report_time: "08:00", is_active: true },
+  { store_name: "三民鼎山店", short_name: "鼎山", group_id: null, group_name: null, noon_report_time: "14:00", evening_report_time: "19:00", closing_report_time: "23:00", daily_hq_report_time: "08:00", is_active: true },
+  { store_name: "屏東潮州店", short_name: "潮州", group_id: null, group_name: null, noon_report_time: "14:00", evening_report_time: "19:00", closing_report_time: "21:30", daily_hq_report_time: "08:00", is_active: true },
+  { store_name: "屏東潮二店", short_name: "潮二", group_id: null, group_name: null, noon_report_time: "13:00", evening_report_time: "18:00", closing_report_time: "21:30", daily_hq_report_time: "08:00", is_active: true }
+];
+
 const labels = {
   general: "一般訊息",
   field_report: "現場回報",
@@ -342,7 +356,8 @@ export async function getActiveStoreSettings(supabase) {
     .eq("is_active", true)
     .order("id", { ascending: true });
 
-  if (error && error.code !== "42P01") throw error;
+  if (error?.code === "42P01" || error?.code === "PGRST205") return fallbackStoreSettings;
+  if (error) throw error;
   return data || [];
 }
 

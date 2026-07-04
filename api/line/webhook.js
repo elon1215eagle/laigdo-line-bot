@@ -364,9 +364,10 @@ function buildStoreSelectionMessage(stores) {
     ...stores.map((store, index) => `${index + 1}. ${store.short_name || store.store_name}`),
     "",
     "回覆方式：",
-    "- 單店：1",
-    "- 多店：1,3,5",
-    "- 全部：全部"
+    "- 單店：今日匯報 1",
+    "- 多店：今日匯報 1,3,5",
+    "- 指定店名：今日匯報 大昌",
+    "- 全部：今日匯報 全部"
   ];
   return lines.join("\n");
 }
@@ -400,16 +401,27 @@ function parseStoreSelection(text = "", stores = []) {
   return [...selected.values()];
 }
 
+function extractReportSelectionText(text = "") {
+  let selectionText = text;
+  for (const keyword of reportCommandKeywords) {
+    selectionText = selectionText.replace(keyword, "");
+  }
+  return selectionText.trim();
+}
+
 async function createPendingReportRequest(supabase, record) {
   const sourceId = getSourceId(record);
   if (!sourceId) return;
 
-  await supabase.from("line_report_requests").insert({
+  const { error } = await supabase.from("line_report_requests").insert({
     source_id: sourceId,
     user_id: record.user_id,
     status: "pending",
     expires_at: new Date(Date.now() + 15 * 60 * 1000).toISOString()
   });
+
+  if (error?.code === "42P01" || error?.code === "PGRST205") return;
+  if (error) throw error;
 }
 
 async function findPendingReportRequest(supabase, record) {
@@ -433,7 +445,7 @@ async function findPendingReportRequest(supabase, record) {
 async function completeReportRequest(supabase, request, selectedStores) {
   if (!request?.id) return;
 
-  await supabase
+  const { error } = await supabase
     .from("line_report_requests")
     .update({
       status: "completed",
@@ -441,6 +453,9 @@ async function completeReportRequest(supabase, request, selectedStores) {
       completed_at: new Date().toISOString()
     })
     .eq("id", request.id);
+
+  if (error?.code === "42P01" || error?.code === "PGRST205") return;
+  if (error) throw error;
 }
 
 async function handleHeadquartersReportCommand(supabase, record) {
@@ -450,6 +465,15 @@ async function handleHeadquartersReportCommand(supabase, record) {
   const activeStores = stores.filter((store) => store.is_active !== false);
 
   if (isTodayReportCommand(record.text)) {
+    const selectionText = extractReportSelectionText(record.text);
+    const selectedStores = parseStoreSelection(selectionText, activeStores);
+    if (selectedStores.length) {
+      const selectedStoreNames = selectedStores.map((store) => store.store_name);
+      const result = await buildDailyReport({ supabase, selectedStoreNames });
+      await replyToLine(record.reply_token, result.report);
+      return true;
+    }
+
     await createPendingReportRequest(supabase, record);
     await replyToLine(record.reply_token, buildStoreSelectionMessage(activeStores));
     return true;
