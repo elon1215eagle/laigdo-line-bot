@@ -118,11 +118,24 @@ create table if not exists public.store_staff (
   unique (store_name, role_name, staff_name)
 );
 
+create table if not exists public.line_report_requests (
+  id bigint generated always as identity primary key,
+  source_id text not null,
+  user_id text,
+  status text not null default 'pending',
+  store_names text[] not null default '{}',
+  created_at timestamptz not null default now(),
+  expires_at timestamptz not null,
+  completed_at timestamptz
+);
+
 alter table public.store_settings enable row level security;
 alter table public.store_staff enable row level security;
+alter table public.line_report_requests enable row level security;
 
 grant select, insert, update, delete on public.store_settings to service_role;
 grant select, insert, update, delete on public.store_staff to service_role;
+grant select, insert, update, delete on public.line_report_requests to service_role;
 grant usage, select on all sequences in schema public to service_role;
 
 create index if not exists store_settings_group_id_idx
@@ -133,6 +146,9 @@ create index if not exists store_settings_short_name_idx
 
 create index if not exists store_staff_store_name_idx
   on public.store_staff (store_name);
+
+create index if not exists line_report_requests_source_status_idx
+  on public.line_report_requests (source_id, status, created_at desc);
 
 insert into public.store_settings (
   store_name,

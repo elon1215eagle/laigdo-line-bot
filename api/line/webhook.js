@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { createClient } from "@supabase/supabase-js";
+import { buildDailyReport, getActiveStoreSettings, getSupabase, pushToLine } from "../lib/reporting.js";
 
 const categoryRules = [
   { category: "food_safety", severity: "A", keywords: ["\u98df\u5b89", "\u9178\u6557", "\u7570\u5473", "\u904e\u671f", "\u885b\u751f", "\u51b0\u7bb1", "\u6563\u71b1\u7247", "\u6cb9\u57a2", "\u672a\u6e05\u6f54"] },
@@ -20,6 +20,7 @@ const followUpKeywords = ["\u8ffd\u8e64", "\u672a\u5b8c\u6210", "\u5f85\u8655\u7
 const receivingIssueKeywords = ["\u672a\u5230", "\u6c92\u5230", "\u5c11", "\u7f3a", "\u7570\u5e38", "\u7834\u640d", "\u9000\u8ca8", "\u6578\u91cf\u4e0d\u5c0d"];
 const orderingIssueKeywords = ["\u672a\u4e0b", "\u6f0f\u4e0b", "\u7f3a", "\u7570\u5e38", "\u6578\u91cf\u4e0d\u5c0d", "\u8ffd\u8e64"];
 const mediaTypes = new Set(["image", "video", "audio", "file"]);
+const reportCommandKeywords = ["今日匯報", "今日回報", "今天匯報", "今天回報"];
 
 function getRawBody(req) {
   return new Promise((resolve, reject) => {
@@ -76,13 +77,6 @@ function normalizeLineEvent(event) {
     occurred_at: event.timestamp ? new Date(event.timestamp).toISOString() : new Date().toISOString(),
     raw_event: event
   };
-}
-
-function getSupabase() {
-  const url = process.env.SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
-  if (!url || !key) return null;
-  return createClient(url, key, { auth: { persistSession: false } });
 }
 
 function extensionFromContentType(contentType, fallback = "bin") {
@@ -314,9 +308,23 @@ async function saveEvents(records) {
   return { saved: true, count: saved.length, records: saved };
 }
 
+function splitLineText(text, maxLength = 4800) {
+  const chunks = [];
+  let remaining = text || "";
+  while (remaining.length > maxLength) {
+    const splitAt = remaining.lastIndexOf("\n", maxLength);
+    const index = splitAt > 1000 ? splitAt : maxLength;
+    chunks.push(remaining.slice(0, index));
+    remaining = remaining.slice(index).trimStart();
+  }
+  if (remaining) chunks.push(remaining);
+  return chunks.slice(0, 5);
+}
+
 async function replyToLine(replyToken, text) {
   const token = process.env.LINE_CHANNEL_ACCESS_TOKEN;
   if (!token || !replyToken || !text) return;
+  const messages = splitLineText(text).map((chunk) => ({ type: "text", text: chunk }));
 
   await fetch("https://api.line.me/v2/bot/message/reply", {
     method: "POST",
@@ -326,9 +334,147 @@ async function replyToLine(replyToken, text) {
     },
     body: JSON.stringify({
       replyToken,
-      messages: [{ type: "text", text }]
+      messages
     })
   });
+}
+
+function getSourceId(record) {
+  return record.group_id || record.room_id || record.user_id;
+}
+
+function isHeadquartersSource(record) {
+  const reportTo = process.env.LINE_REPORT_TO;
+  if (!reportTo) return false;
+  return [record.group_id, record.room_id, record.user_id].includes(reportTo);
+}
+
+function isTodayReportCommand(text = "") {
+  return reportCommandKeywords.some((keyword) => text.includes(keyword));
+}
+
+function buildStoreSelectionMessage(stores) {
+  if (!stores.length) {
+    return "目前尚未建立可匯報門市清單，請先完成 store_settings 設定。";
+  }
+
+  const lines = [
+    "請選擇要產出今日匯報的門市：",
+    "",
+    ...stores.map((store, index) => `${index + 1}. ${store.short_name || store.store_name}`),
+    "",
+    "回覆方式：",
+    "- 單店：1",
+    "- 多店：1,3,5",
+    "- 全部：全部"
+  ];
+  return lines.join("\n");
+}
+
+function parseStoreSelection(text = "", stores = []) {
+  const normalized = text.trim();
+  if (!normalized) return [];
+  if (/^(全部|全店|所有|all)$/i.test(normalized)) return stores;
+
+  const tokens = normalized
+    .split(/[\s,，、/／]+/)
+    .map((token) => token.trim())
+    .filter(Boolean);
+  const selected = new Map();
+
+  tokens.forEach((token) => {
+    const index = Number(token);
+    if (Number.isInteger(index) && index >= 1 && index <= stores.length) {
+      const store = stores[index - 1];
+      selected.set(store.store_name, store);
+      return;
+    }
+
+    stores.forEach((store) => {
+      if (token === store.short_name || token === store.store_name || store.store_name.includes(token)) {
+        selected.set(store.store_name, store);
+      }
+    });
+  });
+
+  return [...selected.values()];
+}
+
+async function createPendingReportRequest(supabase, record) {
+  const sourceId = getSourceId(record);
+  if (!sourceId) return;
+
+  await supabase.from("line_report_requests").insert({
+    source_id: sourceId,
+    user_id: record.user_id,
+    status: "pending",
+    expires_at: new Date(Date.now() + 15 * 60 * 1000).toISOString()
+  });
+}
+
+async function findPendingReportRequest(supabase, record) {
+  const sourceId = getSourceId(record);
+  if (!sourceId) return null;
+
+  const { data, error } = await supabase
+    .from("line_report_requests")
+    .select("id, source_id, user_id, status, expires_at")
+    .eq("source_id", sourceId)
+    .eq("status", "pending")
+    .gt("expires_at", new Date().toISOString())
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error && error.code !== "42P01") throw error;
+  return data || null;
+}
+
+async function completeReportRequest(supabase, request, selectedStores) {
+  if (!request?.id) return;
+
+  await supabase
+    .from("line_report_requests")
+    .update({
+      status: "completed",
+      store_names: selectedStores.map((store) => store.store_name),
+      completed_at: new Date().toISOString()
+    })
+    .eq("id", request.id);
+}
+
+async function handleHeadquartersReportCommand(supabase, record) {
+  if (!isHeadquartersSource(record) || record.message_type !== "text") return false;
+
+  const stores = await getActiveStoreSettings(supabase);
+  const activeStores = stores.filter((store) => store.is_active !== false);
+
+  if (isTodayReportCommand(record.text)) {
+    await createPendingReportRequest(supabase, record);
+    await replyToLine(record.reply_token, buildStoreSelectionMessage(activeStores));
+    return true;
+  }
+
+  const pending = await findPendingReportRequest(supabase, record);
+  if (!pending) return false;
+
+  const selectedStores = parseStoreSelection(record.text, activeStores);
+  if (!selectedStores.length) {
+    await replyToLine(record.reply_token, "未辨識門市，請回覆編號，例如：1 或 1,3，或回覆「全部」。");
+    return true;
+  }
+
+  const selectedStoreNames = selectedStores.map((store) => store.store_name);
+  const result = await buildDailyReport({ supabase, selectedStoreNames });
+  await completeReportRequest(supabase, pending, selectedStores);
+
+  if (record.reply_token) {
+    await replyToLine(record.reply_token, result.report);
+  } else {
+    await pushToLine(result.report, getSourceId(record));
+  }
+
+  return true;
 }
 
 export const config = {
@@ -354,6 +500,13 @@ export default async function handler(req, res) {
   const events = Array.isArray(payload.events) ? payload.events : [];
   const records = events.map(normalizeLineEvent);
   const result = await saveEvents(records);
+
+  const supabase = getSupabase();
+  if (supabase) {
+    for (const record of result.records || records) {
+      await handleHeadquartersReportCommand(supabase, record);
+    }
+  }
 
   const shouldAck = process.env.LINE_ACK_ENABLED === "true";
   if (shouldAck) {
