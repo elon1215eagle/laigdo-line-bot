@@ -1,0 +1,13 @@
+{
+  "name": "laigdo-line-management-bot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "npx vercel dev",
+    "lint": "node --check api/line/webhook.js && node --check api/cron/daily-report.js && node --check api/health.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.4"
+  }
+}
