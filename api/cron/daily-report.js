@@ -1,5 +1,9 @@
 import { createClient } from "@supabase/supabase-js";
 
+const DAILY_REPORT_TIME = "08:00";
+const REPORT_WINDOW_HOURS = 24;
+const STORE_BROADCAST_ENABLED = false;
+
 const labels = {
   general: "\u4e00\u822c\u8a0a\u606f",
   field_report: "\u73fe\u5834\u56de\u5831",
@@ -86,6 +90,27 @@ function getGroupDisplayName(groupId, groupNameMap) {
   return name || "\u672a\u547d\u540d\u7fa4\u7d44";
 }
 
+function getStoreAliases(setting) {
+  const names = [
+    setting.short_name,
+    setting.store_name,
+    setting.store_name?.replace("\u9cf3\u5c71", "").replace("\u4e09\u6c11", "").replace("\u524d\u93ae", "").replace("\u5c4f\u6771", "").replace("\u5e97", "")
+  ];
+
+  return [...new Set(names.filter(Boolean))];
+}
+
+function timeText(value) {
+  if (!value) return "\u672a\u8a2d\u5b9a";
+  return String(value).slice(0, 5);
+}
+
+function rowMatchesStore(row, setting) {
+  const parsed = parseRevenueText(row.text || "");
+  const aliases = getStoreAliases(setting);
+  return aliases.some((alias) => parsed.store === alias || (row.text || "").includes(alias));
+}
+
 function buildReport(rows) {
   const groupNameMap = getGroupNameMap();
 
@@ -125,6 +150,7 @@ function buildReport(rows) {
   }
 
   lines.push("\u8ffd\u8e64\u8981\u6c42\uff1aA\u7d1a\u4eca\u65e5\u8655\u7406\uff0cB\u7d1a24\u5c0f\u6642\u5167\u56de\u8986\u6539\u5584\u7167\u7247\uff0cC\u7d1a\u7d0d\u5165\u4e0b\u6b21\u5de1\u6aa2\u3002");
+  lines.push("\u767c\u5e03\u539f\u5247\uff1a\u672a\u7d93 Elon \u660e\u78ba\u6307\u793a\uff0c\u4e0d\u5c0d\u5404\u9580\u5e02\u7fa4\u4e3b\u52d5\u767c\u4f48\u8a0a\u606f\u3002");
   return lines.join("\n");
 }
 
@@ -194,6 +220,41 @@ function parseRevenueText(text = "") {
     reportTime: timeMatch ? `${timeMatch[1].padStart(2, "0")}:${timeMatch[2] || "00"}` : null,
     amount: amountMatch ? Number(amountMatch[1]) : null
   };
+}
+
+function buildStoreReportAuditSection(rows, storeSettings) {
+  const activeSettings = (storeSettings || []).filter((setting) => setting.is_active !== false && setting.group_id);
+
+  if (!activeSettings.length) {
+    return ["", `\u9580\u5e02\u56de\u5831\u6aa2\u6838\uff08\u6bcf\u65e5 ${DAILY_REPORT_TIME}\uff09`, "\u5c1a\u672a\u8a2d\u5b9a\u5df2\u7d81\u5b9a LINE \u7fa4\u7684\u9580\u5e02\u3002"].join("\n");
+  }
+
+  const revenueRows = (rows || []).filter((row) => row.category === "revenue" || row.category === "\u5373\u6642\u71df\u6536");
+  const lines = ["", `\u9580\u5e02\u56de\u5831\u6aa2\u6838\uff08\u6bcf\u65e5 ${DAILY_REPORT_TIME}\uff09`];
+  lines.push(`\u6aa2\u6838\u5340\u9593\uff1a${DAILY_REPORT_TIME} \u524d ${REPORT_WINDOW_HOURS} \u5c0f\u6642`);
+  lines.push(STORE_BROADCAST_ENABLED ? "\u9580\u5e02\u7fa4\u767c\u4f48\uff1a\u5df2\u555f\u7528" : "\u9580\u5e02\u7fa4\u767c\u4f48\uff1a\u95dc\u9589\uff08\u672a\u7d93 Elon \u6307\u793a\u4e0d\u767c\u5e03\uff09");
+
+  activeSettings.forEach((setting) => {
+    const matchedRows = revenueRows
+      .filter((row) => rowMatchesStore(row, setting))
+      .sort((a, b) => new Date(b.occurred_at) - new Date(a.occurred_at));
+    const latest = matchedRows[0];
+    const expectedTimes = [setting.noon_report_time, setting.evening_report_time, setting.closing_report_time]
+      .map(timeText)
+      .join(" / ");
+
+    if (!latest) {
+      lines.push(`${setting.short_name}\uff1a\u672a\u5075\u6e2c\u5230\u71df\u6536\u56de\u5831\uff08\u61c9\u56de\u5831 ${expectedTimes}\uff09`);
+      return;
+    }
+
+    const parsed = parseRevenueText(latest.text || "");
+    const amountText = parsed.amount ? `$${parsed.amount.toLocaleString("en-US")}` : "\u91d1\u984d\u672a\u8fa8\u8b58";
+    const reportTime = parsed.reportTime || "\u6642\u9593\u672a\u8fa8\u8b58";
+    lines.push(`${setting.short_name}\uff1a\u5df2\u56de\u5831 ${reportTime} ${amountText}\uff08\u61c9\u56de\u5831 ${expectedTimes}\uff09`);
+  });
+
+  return lines.join("\n");
 }
 
 function buildRevenueSection(rows) {
@@ -296,7 +357,7 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: "Supabase is not configured" });
   }
 
-  const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const since = new Date(Date.now() - REPORT_WINDOW_HOURS * 60 * 60 * 1000).toISOString();
   const { data, error } = await supabase
     .from("line_group_messages")
     .select("group_id, room_id, message_type, text, category, severity, occurred_at")
@@ -314,13 +375,21 @@ export default async function handler(req, res) {
 
   if (taskError) throw taskError;
 
+  const { data: storeSettings, error: storeSettingsError } = await supabase
+    .from("store_settings")
+    .select("store_name, short_name, group_id, group_name, noon_report_time, evening_report_time, closing_report_time, daily_hq_report_time, is_active")
+    .eq("is_active", true)
+    .order("id", { ascending: true });
+
+  if (storeSettingsError && storeSettingsError.code !== "42P01") throw storeSettingsError;
+
   const reportTo = process.env.LINE_REPORT_TO;
   const reportRows = (data || []).filter((row) => {
     if (!reportTo) return true;
     return row.group_id !== reportTo && row.room_id !== reportTo;
   });
 
-  const report = `${buildReport(reportRows)}\n${buildRevenueSection(reportRows)}\n${buildReceivingSection(reportRows)}\n${buildOrderingSection(reportRows)}\n${buildTaskSection(tasks || [])}`;
+  const report = `${buildReport(reportRows)}\n${buildStoreReportAuditSection(reportRows, storeSettings || [])}\n${buildRevenueSection(reportRows)}\n${buildReceivingSection(reportRows)}\n${buildOrderingSection(reportRows)}\n${buildTaskSection(tasks || [])}`;
   const pushResult = await pushToLine(report);
 
   return res.status(200).json({

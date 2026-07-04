@@ -1,72 +1,95 @@
-# LAIGDO 小幫手 LINE 門市管理 Bot
+# LAIGDO LINE Management Bot
 
-用途：讓 `LAIGDO小幫手 @148zqfao` 加入各門市管理群後，接收每日群組訊息，分類問題，儲存到 Supabase，並於每日台灣時間 08:00 產出總部督導日報。
+LAIGDO 小幫手用於收集各門市 LINE 管理群訊息，整理營運問題、任務追蹤、營收回報、收貨量與叫貨量資訊，並於每日 08:00 回報總部。
 
-## 第一階段功能
+## 核心原則
 
-1. 接收 LINE 群組文字、圖片、檔案等事件。
-2. 驗證 LINE Webhook 簽章。
-3. 依關鍵字分類問題：食安衛生、產品品質、庫存缺貨、設備異常、人員排班、客訴服務、營運流程。
-4. 寫入 Supabase 資料表。
-5. 每日 08:00 整理前 24 小時訊息並推送總部群。
+1. 所有門市群訊息先收集、分類、存檔、追蹤。
+2. 未經 Elon 明確指示，不主動在任何門市群發佈訊息。
+3. 每日總部回報時間固定為 08:00。
+4. 每日報表整理區間為 08:00 前 24 小時。
+5. 圖片、影片、音訊、檔案會下載到 Supabase Storage，資料庫只存索引與路徑。
+6. LINE 記事本與相簿內容無法由 Messaging API 主動讀取，需轉貼或轉傳到群組訊息流後才會被收集。
 
-## 必要環境變數
+## 營運功能
 
-| 變數 | 用途 |
-|---|---|
-| `LINE_CHANNEL_SECRET` | LINE Developers 的 Channel secret |
-| `LINE_CHANNEL_ACCESS_TOKEN` | LINE Developers 產生的 long-lived channel access token |
-| `SUPABASE_URL` | Supabase 專案網址 |
-| `SUPABASE_SERVICE_ROLE_KEY` | 後端寫入資料庫使用 |
-| `LINE_REPORT_TO` | 總部日報接收群組 ID |
-| `LINE_GROUP_NAMES` | 門市群組 ID 對名稱的 JSON 對照表 |
-| `CRON_SECRET` | 保護每日報告 API 的密碼，可選 |
+- 接收 LINE 群組文字、圖片、影片、音訊與檔案。
+- 依內容分類為一般訊息、現場回報、食安衛生、產品品質、即時營收、收貨量、門市調貨配送、叫貨量、庫存缺貨、設備異常、人員排班、客訴服務、營運流程。
+- 自動建立需追蹤任務，保留未完成、已完成、需追蹤的前後脈絡。
+- 每日 08:00 推送總部彙整，不對門市群自動發佈。
+- 依門市設定檢核 14:00、19:00、打烊營收回報狀態。
 
-`LINE_REPORT_TO` 代表總部日報接收群。系統會把這個群排除在門市問題統計之外，避免總部群訊息混入門市日報。
+## LINE 設定
 
-`LINE_GROUP_NAMES` 範例：
-
-```json
-{
-  "C664b7d66db0ef351a87a2a88acec921c": "義華 大昌管理群"
-}
-```
-
-## Webhook URL
-
-LINE Developers 的 Webhook URL：
+Webhook URL:
 
 ```text
 https://line-management-bot.vercel.app/api/line/webhook
 ```
 
-## Supabase 建表
-
-到 Supabase SQL Editor 執行：
-
-```sql
--- supabase/schema.sql
-```
-
-## 每日回報 API
+每日 08:00 報表 API:
 
 ```text
 GET https://line-management-bot.vercel.app/api/cron/daily-report
-Authorization: Bearer 你的CRON_SECRET
 ```
 
-正式排程設定為每天台灣時間 08:00 執行，整理 08:00 前 24 小時的門市群訊息。
+## 環境變數
 
-## 嚴重度規則
+| 變數 | 用途 |
+|---|---|
+| `LINE_CHANNEL_SECRET` | LINE Developers Channel secret |
+| `LINE_CHANNEL_ACCESS_TOKEN` | LINE long-lived channel access token |
+| `SUPABASE_URL` | Supabase 專案 URL |
+| `SUPABASE_SERVICE_ROLE_KEY` | 伺服器端寫入資料庫與 Storage |
+| `LINE_REPORT_TO` | 總部回報群組 ID |
+| `LINE_GROUP_NAMES` | LINE 群組 ID 對應群名 JSON |
+| `CRON_SECRET` | 選用，保護每日報表 API |
+| `LINE_ACK_ENABLED` | 預設不啟用；只有設為 `true` 才會在來源群組回覆確認 |
 
-| 嚴重度 | 定義 | 處理要求 |
-|---|---|---|
-| A | 食安、重大客訴、營業中斷、嚴重衛生問題 | 當日處理，總部立即追蹤 |
-| B | 品質、缺貨、設備、人員、排班、流程問題 | 24 小時內回報改善 |
-| C | 一般提醒、可改善事項 | 納入下次巡檢 |
+## Supabase
 
-## 注意
+主要資料表：
 
-- Bot 只能讀取加入群組後的新訊息，不能讀取加入前的歷史紀錄。
-- 不要把 Channel secret 或 Channel access token 貼到 LINE 群組。
-- 正式啟用 Webhook 後，建議關閉 LINE 官方帳號自動回覆。
+- `line_group_messages`
+- `line_tasks`
+- `line_task_events`
+- `store_settings`
+- `store_staff`
+
+`store_settings` 目前已匯入 `00AI人資.xlsx / 各店時間`：
+
+- 鳳山五甲店
+- 鳳山凱旋店
+- 鳳山武廟店
+- 鳳山中山店
+- 鳳山南華店
+- 前鎮隆興店
+- 三民大昌店
+- 三民義華店
+- 三民鼎山店
+- 屏東潮州店
+- 屏東潮二店
+
+目前已綁定 LINE 群組：
+
+| 群組 | 門市 |
+|---|---|
+| 義華 大昌管理群 | 三民義華店、三民大昌店 |
+
+## 發佈邊界
+
+本系統預設只做總部彙整與內部任務追蹤。任何門市群公告、提醒、催辦、回覆，都必須由 Elon 明確下達指令後才能執行。
+
+## GitHub / Vercel
+
+GitHub repository:
+
+```text
+https://github.com/elon1215eagle/laigdo-line-bot
+```
+
+Production:
+
+```text
+https://line-management-bot.vercel.app
+```
