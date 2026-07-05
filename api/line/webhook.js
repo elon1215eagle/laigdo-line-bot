@@ -283,7 +283,13 @@ async function upsertTaskForRecord(supabase, record, messageRow) {
 
 async function saveEvents(records) {
   const supabase = getSupabase();
-  if (!supabase || records.length === 0) return { saved: false, count: records.length };
+  if (!supabase || records.length === 0) {
+    console.log("line_webhook_save_skipped", {
+      hasSupabase: Boolean(supabase),
+      records: records.length
+    });
+    return { saved: false, count: records.length };
+  }
 
   const saved = [];
   for (const record of records) {
@@ -304,6 +310,19 @@ async function saveEvents(records) {
 
     saved.push({ ...insertRecord, id: messageRow.id, task_id: taskId });
   }
+
+  console.log("line_webhook_saved", {
+    count: saved.length,
+    groups: [...new Set(saved.map((record) => record.group_id || record.room_id || record.user_id).filter(Boolean))],
+    types: saved.map((record) => record.message_type),
+    media: saved
+      .filter((record) => mediaTypes.has(record.message_type))
+      .map((record) => ({
+        type: record.message_type,
+        path: record.media_storage_path || null,
+        error: record.media_download_error || null
+      }))
+  });
 
   return { saved: true, count: saved.length, records: saved };
 }
