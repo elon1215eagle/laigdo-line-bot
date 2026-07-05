@@ -46,6 +46,10 @@ GET https://line-management-bot.vercel.app/api/cron/daily-report
 | `LINE_GROUP_NAMES` | LINE 群組 ID 對應群名 JSON |
 | `CRON_SECRET` | 選用，保護每日報表 API |
 | `LINE_ACK_ENABLED` | 預設不啟用；只有設為 `true` 才會在來源群組回覆確認 |
+| `OPENAI_API_KEY` | 圖片 OCR 與現場辨識使用 |
+| `OPENAI_VISION_MODEL` | 圖片辨識模型，預設 `gpt-4.1-mini` |
+| `IMAGE_ANALYSIS_MAX_BYTES` | 單張圖片分析上限，預設 4MB |
+| `ANALYZE_ADMIN_TOKEN` | 補跑既有圖片 OCR 的管理 token |
 
 ## Supabase
 

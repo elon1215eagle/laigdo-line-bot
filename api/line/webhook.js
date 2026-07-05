@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { buildDailyReport, getActiveStoreSettings, getSupabase, pushToLine } from "../lib/reporting.js";
+import { analyzeImageBytes, buildImageText } from "../lib/image-analysis.js";
 
 const categoryRules = [
   { category: "food_safety", severity: "A", keywords: ["\u98df\u5b89", "\u9178\u6557", "\u7570\u5473", "\u904e\u671f", "\u885b\u751f", "\u51b0\u7bb1", "\u6563\u71b1\u7247", "\u6cb9\u57a2", "\u672a\u6e05\u6f54"] },
@@ -129,11 +130,38 @@ async function saveMediaToStorage(supabase, record) {
 
   if (error) return { media_download_error: error.message };
 
+  const imageAnalysis = record.message_type === "image"
+    ? await analyzeImageBytes(downloaded.bytes, downloaded.contentType)
+    : null;
+
   return {
     media_storage_bucket: "line-media",
     media_storage_path: path,
     media_content_type: downloaded.contentType,
-    media_file_size: record.media_file_size || downloaded.bytes.length
+    media_file_size: record.media_file_size || downloaded.bytes.length,
+    image_analysis: imageAnalysis
+  };
+}
+
+function enrichRecordWithImageAnalysis(record) {
+  const analysis = record.image_analysis;
+  if (!analysis) return record;
+
+  const rawEvent = {
+    ...(record.raw_event || {}),
+    image_analysis: analysis
+  };
+
+  if (analysis.status !== "completed") {
+    return { ...record, raw_event: rawEvent };
+  }
+
+  return {
+    ...record,
+    text: record.text || buildImageText(analysis),
+    category: analysis.category || record.category,
+    severity: analysis.severity || record.severity,
+    raw_event: rawEvent
   };
 }
 
@@ -294,7 +322,8 @@ async function saveEvents(records) {
   const saved = [];
   for (const record of records) {
     const mediaInfo = await saveMediaToStorage(supabase, record);
-    const insertRecord = { ...record, ...mediaInfo };
+    const insertRecord = enrichRecordWithImageAnalysis({ ...record, ...mediaInfo });
+    delete insertRecord.image_analysis;
     const { data: messageRow, error } = await supabase
       .from("line_group_messages")
       .insert(insertRecord)
