@@ -2,9 +2,9 @@ import { analyzeImageBytes, buildImageText } from "../lib/image-analysis.js";
 import { getSupabase } from "../lib/reporting.js";
 
 function isAuthorized(req) {
-  const token = process.env.ANALYZE_ADMIN_TOKEN || process.env.CRON_SECRET;
-  if (!token) return false;
-  return req.headers.authorization === `Bearer ${token}`;
+  const tokens = [process.env.ANALYZE_ADMIN_TOKEN, process.env.CRON_SECRET].filter(Boolean);
+  if (!tokens.length) return false;
+  return tokens.some((token) => req.headers.authorization === `Bearer ${token}`);
 }
 
 async function analyzeRow(supabase, row) {
