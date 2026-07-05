@@ -34,6 +34,12 @@ https://line-management-bot.vercel.app/api/line/webhook
 GET https://line-management-bot.vercel.app/api/cron/daily-report
 ```
 
+Vercel Cron 排程：
+
+```text
+0 0 * * *  # UTC 00:00 = 台灣時間 08:00
+```
+
 ## 環境變數
 
 | 變數 | 用途 |
