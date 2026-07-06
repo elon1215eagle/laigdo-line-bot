@@ -856,6 +856,51 @@ function summarizeTemperatureIssue(issue) {
   return parts.join("；");
 }
 
+function taipeiDateText(offsetDays = 0) {
+  const date = new Date(Date.now() + offsetDays * 24 * 60 * 60 * 1000);
+  return new Intl.DateTimeFormat("zh-TW", {
+    timeZone: "Asia/Taipei",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).format(date);
+}
+
+function parseCashDifference(text = "") {
+  const normalized = normalizeReportText(text);
+  const match = normalized.match(/現金差異\s*:?\s*(?:\$?\s*)?([+-]?\d{1,7})/);
+  return match ? Number(match[1]) : null;
+}
+
+function formatRevenueSummary(item) {
+  if (item.status !== "已回報") return `- ${item.store}：未回報`;
+  const table = item.revenueTable;
+  const parts = [];
+  if (table?.noonAmount) parts.push(`14點 $${table.noonAmount.toLocaleString("en-US")}`);
+  if (table?.eveningAmount) parts.push(`19點 $${table.eveningAmount.toLocaleString("en-US")}`);
+  const amountText = item.amount ? `$${item.amount.toLocaleString("en-US")}` : "金額需確認";
+  const cashText = item.cashDifference == null ? "現金差異未填" : `現金差異 ${item.cashDifference.toLocaleString("en-US")}`;
+  return [`- ${item.store}：${amountText}`, parts.length ? `  ${parts.join(" / ")} / ${cashText}` : `  ${item.time || "時間未辨識"} / ${cashText}`].join("\n");
+}
+
+function issueCategorySummary(rows = [], temperatureIssues = []) {
+  const categories = [
+    ["設備", ["equipment"]],
+    ["冰箱", ["food_safety"]],
+    ["人員", ["staffing"]],
+    ["貨品", ["inventory", "ordering", "store_transfer", "receiving"]],
+    ["廠商", ["receiving", "store_transfer"]],
+    ["客訴", ["customer_service"]],
+    ["營業額", ["revenue"]]
+  ];
+
+  return categories.map(([name, keys]) => {
+    const count = rows.filter((row) => keys.includes(row.category)).length
+      + (name === "冰箱" ? temperatureIssues.length : 0);
+    return `${name} ${count}`;
+  }).join(" / ");
+}
+
 export async function buildHqSummaryReport({ supabase } = {}) {
   const since = new Date(Date.now() - REPORT_WINDOW_HOURS * 60 * 60 * 1000).toISOString();
   const storeSettings = await getActiveStoreSettings(supabase);
@@ -903,17 +948,37 @@ export async function buildHqSummaryReport({ supabase } = {}) {
       store: setting.short_name || setting.store_name,
       status: "已回報",
       amount: parsed.amount,
-      time: parsed.reportTime
+      time: parsed.reportTime,
+      revenueTable: parsed.revenueTable,
+      cashDifference: parseCashDifference(latest.text || "")
     };
   });
 
   const revenueMissing = revenueStatus.filter((item) => item.status !== "已回報");
   const lines = [
     "【萊吉多總部摘要日報】",
-    `區間：${DAILY_REPORT_TIME} 前 ${REPORT_WINDOW_HOURS} 小時`,
+    `日期：${taipeiDateText(-1)}`,
+    `資料區間：${DAILY_REPORT_TIME} 前 ${REPORT_WINDOW_HOURS} 小時`,
     `門市：啟用 ${activeStores.length} 店 / 已綁 LINE ${boundStores.length} 店`,
-    ...sectionTitle(1, "今日必處理")
+    ...sectionTitle(1, "昨日營業額")
   ];
+
+  revenueStatus.forEach((item) => {
+    lines.push(formatRevenueSummary(item));
+  });
+  if (revenueMissing.length) lines.push(`未回報：${revenueMissing.map((item) => item.store).join("、")}`);
+  else lines.push("未回報：無");
+
+  lines.push(...sectionTitle(2, "產品銷售前五名"));
+  lines.push("狀態：待串接營運 APP / POS 品項銷售資料。");
+  lines.push("規則：日後每店顯示昨日銷售量前五名，並標示是否較上週同日下滑。");
+
+  lines.push(...sectionTitle(3, "異常事件"));
+  const gradeA = issueRows.filter((row) => row.severity === "A").length + temperatureIssues.length;
+  const gradeB = issueRows.filter((row) => row.severity === "B").length;
+  const gradeC = rows.filter(isRelevantIssueItem).filter((row) => row.severity === "C").length;
+  lines.push(`A級 ${gradeA} / B級 ${gradeB} / C級 ${gradeC}`);
+  lines.push(issueCategorySummary(rows.filter(isRelevantIssueItem), temperatureIssues));
 
   let actionIndex = 0;
   issueRows.slice(0, 6).forEach((row) => {
@@ -932,26 +997,7 @@ export async function buildHqSummaryReport({ supabase } = {}) {
     lines.push(`另有 ${issueRows.length + temperatureIssues.length - actionIndex} 項未列出`);
   }
 
-  lines.push(...sectionTitle(2, "門市狀態"));
-  lines.push(`訊息總數：${rows.length} 筆`);
-  lines.push(`異常/即時：${issueRows.length + temperatureIssues.length} 項`);
-  lines.push(`未完成任務：${openTasks.length} 項`);
-  if (revenueMissing.length) {
-    lines.push(`營收未回報：${revenueMissing.map((item) => item.store).join("、")}`);
-  } else {
-    lines.push("營收未回報：無");
-  }
-
-  lines.push(...sectionTitle(3, "營收回報"));
-  revenueStatus.forEach((item) => {
-    if (item.status !== "已回報") {
-      lines.push(`- ${item.store}：未回報`);
-      return;
-    }
-    lines.push(`- ${item.store}：${item.time || "時間未辨識"} ${item.amount ? `$${item.amount.toLocaleString("en-US")}` : "金額需確認"}`);
-  });
-
-  lines.push(...sectionTitle(4, "任務追蹤"));
+  lines.push(...sectionTitle(4, "今日需追蹤"));
   if (!openTasks.length) {
     lines.push("目前沒有需追蹤任務。");
   } else {
@@ -964,7 +1010,16 @@ export async function buildHqSummaryReport({ supabase } = {}) {
     if (openTasks.length > 6) lines.push(`另有 ${openTasks.length - 6} 項未列出`);
   }
 
-  lines.push(...sectionTitle(5, "查詢指令"));
+  lines.push(...sectionTitle(5, "庫存與貨品差異"));
+  lines.push("日報規則：不顯示兩天原始庫存，只顯示今日 vs 昨日差異。");
+  lines.push("計算規則：目前僅供檢核；日後加入進貨、調貨進出後再計正式使用量。");
+  lines.push("明細查詢：今日匯報 門市名稱");
+
+  lines.push(...sectionTitle(6, "趨勢對比"));
+  lines.push("目前：先累積每日營收、品項銷售、異常事件。");
+  lines.push("下一階段：加入昨日 vs 上週同日、本週累計 vs 上週同期。");
+
+  lines.push(...sectionTitle(7, "查詢指令"));
   lines.push("單店明細：今日匯報 大昌");
   lines.push("多店明細：今日匯報 義華,大昌");
   lines.push("總部摘要：總部摘要日報");
