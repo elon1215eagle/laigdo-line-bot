@@ -1,4 +1,5 @@
 import { analyzeImageBytes, buildImageText } from "../lib/image-analysis.js";
+import { saveInventoryExtraction } from "../lib/inventory-extraction.js";
 import { getSupabase } from "../lib/reporting.js";
 
 function isAuthorized(req) {
@@ -13,7 +14,8 @@ async function analyzeRow(supabase, row) {
   }
 
   if (row.raw_event?.image_analysis?.status === "completed") {
-    return { id: row.id, status: "already_completed" };
+    const inventory = await saveInventoryExtraction(supabase, row, row.id);
+    return { id: row.id, status: "already_completed", inventory };
   }
 
   const { data, error } = await supabase.storage
@@ -48,7 +50,22 @@ async function analyzeRow(supabase, row) {
     return { id: row.id, status: "failed", error: updateError.message };
   }
 
-  return { id: row.id, status: analysis.status, category: analysis.category, severity: analysis.severity };
+  const inventoryRecord = {
+    ...row,
+    ...patch,
+    raw_event: rawEvent,
+    category: patch.category || row.category,
+    severity: patch.severity || row.severity
+  };
+  const inventory = await saveInventoryExtraction(supabase, inventoryRecord, row.id);
+
+  return {
+    id: row.id,
+    status: analysis.status,
+    category: analysis.category,
+    severity: analysis.severity,
+    inventory
+  };
 }
 
 export default async function handler(req, res) {

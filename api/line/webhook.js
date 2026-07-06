@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
-import { buildDailyReport, getActiveStoreSettings, getSupabase, pushToLine } from "../lib/reporting.js";
+import { buildDailyReport, buildHqSummaryReport, getActiveStoreSettings, getSupabase, pushToLine } from "../lib/reporting.js";
 import { analyzeImageBytes, buildImageText } from "../lib/image-analysis.js";
+import { saveInventoryExtraction } from "../lib/inventory-extraction.js";
 
 const categoryRules = [
   { category: "food_safety", severity: "A", keywords: ["\u98df\u5b89", "\u9178\u6557", "\u7570\u5473", "\u904e\u671f", "\u885b\u751f", "\u51b0\u7bb1", "\u6563\u71b1\u7247", "\u6cb9\u57a2", "\u672a\u6e05\u6f54"] },
@@ -22,6 +23,8 @@ const receivingIssueKeywords = ["\u672a\u5230", "\u6c92\u5230", "\u5c11", "\u7f3
 const orderingIssueKeywords = ["\u672a\u4e0b", "\u6f0f\u4e0b", "\u7f3a", "\u7570\u5e38", "\u6578\u91cf\u4e0d\u5c0d", "\u8ffd\u8e64"];
 const mediaTypes = new Set(["image", "video", "audio", "file"]);
 const reportCommandKeywords = ["今日匯報", "今日回報", "今天匯報", "今天回報"];
+const summaryReportCommandKeywords = ["總部摘要日報", "总部摘要日报", "今日摘要", "摘要日報", "摘要日报"];
+const defaultDailyImageLimit = 100;
 
 function getRawBody(req) {
   return new Promise((resolve, reject) => {
@@ -42,6 +45,14 @@ function isValidLineSignature(rawBody, signature) {
 
 function classifyMessage(text = "", messageType = "text") {
   if (/\bpo\b/i.test(text) && /(?:\$|[0-9][0-9,]*\s*$|\u71df\u696d\u984d|\u6536\u5165)/.test(text)) {
+    return { category: "revenue", severity: "C" };
+  }
+
+  if (
+    /(義華|大昌|五甲|建興|自由|鼎中|瑞隆|文山|小港|林園|鳳山)/.test(text)
+    && /(?:14\s*(?:點|:00|00)|19\s*(?:點|:00|00)|總營收|營收|收入|業績)/.test(text)
+    && /\$?\s*[1-9]\d{2,7}/.test(String(text).replace(/,/g, ""))
+  ) {
     return { category: "revenue", severity: "C" };
   }
 
@@ -131,7 +142,7 @@ async function saveMediaToStorage(supabase, record) {
   if (error) return { media_download_error: error.message };
 
   const imageAnalysis = record.message_type === "image"
-    ? await analyzeImageBytes(downloaded.bytes, downloaded.contentType)
+    ? await analyzeImageWithDailyLimit(supabase, record, downloaded.bytes, downloaded.contentType)
     : null;
 
   return {
@@ -140,6 +151,74 @@ async function saveMediaToStorage(supabase, record) {
     media_content_type: downloaded.contentType,
     media_file_size: record.media_file_size || downloaded.bytes.length,
     image_analysis: imageAnalysis
+  };
+}
+
+function taiwanDayWindow(date = new Date()) {
+  const taiwanDate = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Taipei",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).format(date);
+
+  const start = new Date(`${taiwanDate}T00:00:00+08:00`);
+  const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
+  return {
+    taiwanDate,
+    start: start.toISOString(),
+    end: end.toISOString()
+  };
+}
+
+async function countTodayImages(supabase, occurredAt) {
+  const window = taiwanDayWindow(new Date(occurredAt || Date.now()));
+  const { count, error } = await supabase
+    .from("line_group_messages")
+    .select("*", { count: "exact", head: true })
+    .eq("message_type", "image")
+    .gte("occurred_at", window.start)
+    .lt("occurred_at", window.end);
+
+  if (error) throw error;
+  return { count: count || 0, ...window };
+}
+
+function buildManualReviewAnalysis(limitInfo) {
+  return {
+    status: "skipped",
+    reason: "daily_image_limit_exceeded",
+    manual_review_required: true,
+    category: "field_report",
+    severity: "C",
+    ocr_text: "",
+    visual_summary: "已超過每日圖片 OCR 上限，圖片已存檔，需人工確認。",
+    task_required: true,
+    task_title: "圖片待人工確認",
+    action_suggestion: "今日圖片 OCR 已達上限，請總部人工查看此圖片內容。",
+    daily_limit: {
+      date: limitInfo.taiwanDate,
+      limit: limitInfo.limit,
+      used_before_this_image: limitInfo.count
+    }
+  };
+}
+
+async function analyzeImageWithDailyLimit(supabase, record, bytes, contentType) {
+  const limit = Number(process.env.OCR_DAILY_IMAGE_LIMIT || defaultDailyImageLimit);
+  const limitInfo = await countTodayImages(supabase, record.occurred_at);
+  if (Number.isFinite(limit) && limit > 0 && limitInfo.count >= limit) {
+    return buildManualReviewAnalysis({ ...limitInfo, limit });
+  }
+
+  const analysis = await analyzeImageBytes(bytes, contentType);
+  return {
+    ...analysis,
+    daily_limit: {
+      date: limitInfo.taiwanDate,
+      limit,
+      used_before_this_image: limitInfo.count
+    }
   };
 }
 
@@ -153,7 +232,13 @@ function enrichRecordWithImageAnalysis(record) {
   };
 
   if (analysis.status !== "completed") {
-    return { ...record, raw_event: rawEvent };
+    return {
+      ...record,
+      text: record.text || buildImageText(analysis),
+      category: analysis.category || record.category,
+      severity: analysis.severity || record.severity,
+      raw_event: rawEvent
+    };
   }
 
   return {
@@ -220,7 +305,13 @@ function buildTaskTitle(record) {
     if (summary) return `${record.category}: ${summary}`;
   }
   if (record.text) return record.text.slice(0, 60);
-  return `${record.category}: ${record.message_type} field report`;
+  const mediaLabels = {
+    image: "圖片回報待判讀",
+    video: "影片回報待判讀",
+    audio: "音訊回報待判讀",
+    file: "檔案回報待判讀"
+  };
+  return `${record.category}: ${mediaLabels[record.message_type] || "訊息待追蹤"}`;
 }
 
 async function upsertTaskForRecord(supabase, record, messageRow) {
@@ -303,7 +394,7 @@ async function upsertTaskForRecord(supabase, record, messageRow) {
     task_id: task.id,
     message_id: messageRow.id,
     event_type: "created",
-    note: record.text || `${record.message_type} field report`
+    note: record.text || buildTaskTitle(record)
   });
 
   return task.id;
@@ -337,7 +428,9 @@ async function saveEvents(records) {
       await supabase.from("line_group_messages").update({ task_id: taskId }).eq("id", messageRow.id);
     }
 
-    saved.push({ ...insertRecord, id: messageRow.id, task_id: taskId });
+    const inventoryResult = await saveInventoryExtraction(supabase, insertRecord, messageRow.id);
+
+    saved.push({ ...insertRecord, id: messageRow.id, task_id: taskId, inventory_result: inventoryResult });
   }
 
   console.log("line_webhook_saved", {
@@ -399,6 +492,10 @@ function isHeadquartersSource(record) {
 
 function isTodayReportCommand(text = "") {
   return reportCommandKeywords.some((keyword) => text.includes(keyword));
+}
+
+function isSummaryReportCommand(text = "") {
+  return summaryReportCommandKeywords.some((keyword) => text.includes(keyword));
 }
 
 function buildStoreSelectionMessage(stores) {
@@ -511,6 +608,12 @@ async function handleHeadquartersReportCommand(supabase, record) {
 
   const stores = await getActiveStoreSettings(supabase);
   const activeStores = stores.filter((store) => store.is_active !== false);
+
+  if (isSummaryReportCommand(record.text)) {
+    const result = await buildHqSummaryReport({ supabase });
+    await replyToLine(record.reply_token, result.report);
+    return true;
+  }
 
   if (isTodayReportCommand(record.text)) {
     const selectionText = extractReportSelectionText(record.text);
