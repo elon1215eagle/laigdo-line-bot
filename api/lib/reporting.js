@@ -108,7 +108,8 @@ function normalizeReportText(text = "") {
 
 function parseRevenueTableText(text = "") {
   const normalized = normalizeReportText(text);
-  const store = normalized.includes("義華") ? "義華" : normalized.includes("大昌") ? "大昌" : null;
+  const storeFromField = normalized.match(/門市\s*:\s*([\u4e00-\u9fa5A-Za-z]+?)店?(\s|$|\n)/)?.[1] || null;
+  const store = storeFromField || (normalized.includes("義華") ? "義華" : normalized.includes("大昌") ? "大昌" : null);
   const amountAfter = (patterns) => {
     for (const pattern of patterns) {
       const match = normalized.match(pattern);
@@ -117,16 +118,16 @@ function parseRevenueTableText(text = "") {
     return null;
   };
   const noonAmount = amountAfter([
-    /14\s*(?:點|:00|00)?\s*(?:營收|收入|業績)?\s*\$?\s*([1-9]\d{2,7})/i,
+    /14\s*(?:點|:00|00)?\s*(?:營收|收入|業績)?\s*:?\s*\$?\s*([1-9]\d{2,7})/i,
     /14\s*(?:點|:00|00)?.*?(?:義華|大昌|五甲|建興|自由|鼎中|瑞隆|文山|小港|林園|鳳山)\s*[-/]\s*\$?\s*([1-9]\d{2,7})/i,
     /(?:中午|午間).*?\$?\s*([1-9]\d{2,7})/i
   ]);
   const eveningAmount = amountAfter([
-    /19\s*(?:點|:00|00)?\s*(?:營收|收入|業績)?\s*\$?\s*([1-9]\d{2,7})/i,
+    /19\s*(?:點|:00|00)?\s*(?:營收|收入|業績)?\s*:?\s*\$?\s*([1-9]\d{2,7})/i,
     /(?:晚上|晚間).*?\$?\s*([1-9]\d{2,7})/i
   ]);
   const totalAmount = amountAfter([
-    /(?:總營收|總收入|今日營收|今日收入|總計|合計)\s*\$?\s*([1-9]\d{2,7})/i
+    /(?:總營收|總收入|今日營收|今日收入|總計|合計)\s*:?\s*\$?\s*([1-9]\d{2,7})/i
   ]);
   const dateText = normalized.match(/日期[:：]?\s*([^\n]+)/)?.[1]?.trim() || null;
 
