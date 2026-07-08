@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { buildDailyReport, buildHqSummaryReport, getActiveStoreSettings, getSupabase, pushToLine } from "../lib/reporting.js";
+import { buildTransferDeliveryReport } from "../lib/transfer-reporting.js";
 import { analyzeImageBytes, buildImageText } from "../lib/image-analysis.js";
 import { saveInventoryExtraction } from "../lib/inventory-extraction.js";
 
@@ -24,6 +25,9 @@ const orderingIssueKeywords = ["\u672a\u4e0b", "\u6f0f\u4e0b", "\u7f3a", "\u7570
 const mediaTypes = new Set(["image", "video", "audio", "file"]);
 const reportCommandKeywords = ["今日匯報", "今日回報", "今天匯報", "今天回報"];
 const summaryReportCommandKeywords = ["總部摘要日報", "总部摘要日报", "今日摘要", "摘要日報", "摘要日报"];
+const transferTodayCommandKeywords = ["今日配送清單", "今日調貨清單", "今天配送清單", "今天調貨清單"];
+const transferTomorrowCommandKeywords = ["明日配送清單", "明日調貨清單", "明日叫貨整理", "明天配送清單", "明天調貨清單"];
+const transferSecondCommandKeywords = ["二次配送清單", "二次叫貨配送清單", "二次叫貨整理", "今日二次叫貨", "下午二次叫貨"];
 const defaultDailyImageLimit = 100;
 
 function getRawBody(req) {
@@ -498,6 +502,13 @@ function isSummaryReportCommand(text = "") {
   return summaryReportCommandKeywords.some((keyword) => text.includes(keyword));
 }
 
+function getTransferReportType(text = "") {
+  if (transferSecondCommandKeywords.some((keyword) => text.includes(keyword))) return "second";
+  if (transferTodayCommandKeywords.some((keyword) => text.includes(keyword))) return "today";
+  if (transferTomorrowCommandKeywords.some((keyword) => text.includes(keyword))) return "tomorrow";
+  return null;
+}
+
 function buildStoreSelectionMessage(stores) {
   if (!stores.length) {
     return "目前尚未建立可匯報門市清單，請先完成 store_settings 設定。";
@@ -611,6 +622,13 @@ async function handleHeadquartersReportCommand(supabase, record) {
 
   if (isSummaryReportCommand(record.text)) {
     const result = await buildHqSummaryReport({ supabase });
+    await replyToLine(record.reply_token, result.report);
+    return true;
+  }
+
+  const transferReportType = getTransferReportType(record.text);
+  if (transferReportType) {
+    const result = await buildTransferDeliveryReport({ supabase, reportType: transferReportType });
     await replyToLine(record.reply_token, result.report);
     return true;
   }

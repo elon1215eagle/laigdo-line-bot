@@ -47,6 +47,12 @@ const labels = {
   營運流程: "營運流程"
 };
 
+const defaultGroupNames = {
+  C664b7d66db0ef351a87a2a88acec921c: "義華 大昌管理群",
+  Cc3b5acf128788bf429885e7f24062013: "調貨配送群",
+  C2394a249b43accfad143a60abc7a4600: "總部群"
+};
+
 export function getSupabase() {
   const url = process.env.SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
@@ -60,9 +66,12 @@ function label(value) {
 
 function getGroupNameMap() {
   try {
-    return JSON.parse(process.env.LINE_GROUP_NAMES || "{}");
+    return {
+      ...defaultGroupNames,
+      ...JSON.parse(process.env.LINE_GROUP_NAMES || "{}")
+    };
   } catch {
-    return {};
+    return defaultGroupNames;
   }
 }
 
