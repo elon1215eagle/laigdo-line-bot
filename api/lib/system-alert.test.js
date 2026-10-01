@@ -28,3 +28,22 @@ test("system alert creates a concise Traditional Chinese message", () => {
   assert.match(message, /資料庫狀態：ok/);
   assert.doesNotMatch(message, /order_id|password/);
 });
+
+test("daily system health uses the existing safe alert format", () => {
+  const alert = normalizeSystemAlert({
+    source: "laigdo-franchise-ordering",
+    transition: "daily",
+    event: {
+      checked_at: "2026-10-02T02:00:00.000Z",
+      production_url: "https://example.com",
+      app_http_status: 200,
+      database_status: "ok",
+      app_latency_ms: 120,
+      health_latency_ms: 85,
+    },
+  });
+  const message = buildSystemAlertMessage(alert);
+  assert.match(message, /加盟店叫貨系統｜每日健康檢查/);
+  assert.match(message, /系統目前正常運作/);
+  assert.doesNotMatch(message, /order_id|password|access_token|店別：/);
+});

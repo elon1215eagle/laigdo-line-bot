@@ -1,4 +1,4 @@
-const transitions = new Set(["failed", "recovered", "test"]);
+const transitions = new Set(["failed", "recovered", "test", "daily"]);
 
 function clean(value, maxLength = 300) {
   return String(value || "")
@@ -31,11 +31,12 @@ export function buildSystemAlertMessage(alert) {
     failed: "【系統故障通知】",
     recovered: "【系統恢復通知】",
     test: "【系統通知測試】",
+    daily: "【加盟店叫貨系統｜每日健康檢查】",
   }[alert.transition];
   const lines = [
     heading,
     "系統：萊吉多加盟叫貨系統",
-    `狀態：${alert.transition === "failed" ? "異常，請處理" : alert.transition === "recovered" ? "已恢復正常" : "通知管道測試"}`,
+    `狀態：${alert.transition === "failed" ? "異常，請處理" : alert.transition === "recovered" ? "已恢復正常" : alert.transition === "daily" ? "每日檢查完成" : "通知管道測試"}`,
     `檢查時間：${alert.checkedAt}`,
   ];
   if (alert.appStatus) lines.push(`網站狀態：HTTP ${alert.appStatus}`);
@@ -44,6 +45,6 @@ export function buildSystemAlertMessage(alert) {
   if (alert.healthLatencyMs !== null) lines.push(`健康檢查：${alert.healthLatencyMs} ms`);
   if (alert.error) lines.push(`錯誤摘要：${alert.error}`);
   if (alert.productionUrl) lines.push(`系統網址：${alert.productionUrl}`);
-  lines.push(alert.transition === "failed" ? "處理：請先確認 Vercel 與 Supabase 狀態。" : "本通知不包含帳密、訂單或門店資料。");
+  lines.push(alert.transition === "failed" ? "處理：請先確認 Vercel 與 Supabase 狀態。" : "結論：系統目前正常運作。本通知不包含帳密、訂單或門店資料。");
   return lines.join("\n");
 }

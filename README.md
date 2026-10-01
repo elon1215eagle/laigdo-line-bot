@@ -37,6 +37,14 @@ https://line-management-bot.vercel.app/api/line/webhook
 GET https://line-management-bot.vercel.app/api/cron/daily-report
 ```
 
+加盟叫貨系統每日 10:00 健康檢查：
+
+```text
+GET https://line-management-bot.vercel.app/api/cron/franchise-ordering-health
+```
+
+此檢查沿用既有系統故障通知模組，只讀取正式網站與 `/api/health`，不修改訂單或門店資料；每日正常也會固定回報一次。
+
 Vercel Cron 排程：
 
 ```text

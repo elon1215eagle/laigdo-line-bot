@@ -1,1 +1,8 @@
-{}
+{
+  "crons": [
+    {
+      "path": "/api/cron/franchise-ordering-health",
+      "schedule": "0 2 * * *"
+    }
+  ]
+}
